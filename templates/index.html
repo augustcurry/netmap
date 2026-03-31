@@ -102,16 +102,34 @@ function renderNetwork(data) {
 }
 
 // Live SSE updates
+const statusEl = document.getElementById('status');
 const evtSource = new EventSource('/stream');
-evtSource.onmessage = e => {
-  const data = JSON.parse(e.data);
-  renderNetwork(data);
-  const d = new Date(data.ts * 1000);
-  document.getElementById('status').textContent =
-    `🟢 Live · Last updated ${d.toLocaleTimeString()}`;
+
+evtSource.onopen = () => {
+  statusEl.textContent = '🟡 Connected. Waiting for first scan...';
+  console.log("SSE Connection opened.");
 };
-evtSource.onerror = () => {
-  document.getElementById('status').textContent = '🔴 Disconnected — retrying...';
+
+evtSource.onmessage = e => {
+  try {
+    const data = JSON.parse(e.data);
+    if (!data || Object.keys(data).length === 0) {
+      statusEl.textContent = '⚠️ Connected, but no data received yet.';
+      return;
+    }
+    renderNetwork(data);
+    const d = new Date(data.ts * 1000);
+    statusEl.textContent = `🟢 Live · Last updated ${d.toLocaleTimeString()}`;
+    console.log("Data received:", data);
+  } catch (err) {
+    console.error("Error parsing SSE data:", err);
+    statusEl.textContent = '🔴 Data Error';
+  }
+};
+
+evtSource.onerror = (err) => {
+  console.error("SSE Error:", err);
+  statusEl.textContent = '🔴 Disconnected — retrying...';
 };
 </script>
 </body>
