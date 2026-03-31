@@ -1,0 +1,13 @@
+version: '3.8'
+services:
+  netmap:
+    build: .
+    container_name: netmap
+    restart: unless-stopped
+    ports:
+      - "5050:5000"
+    network_mode: host           # required for arp-scan + tailscale access
+    cap_add:
+      - NET_RAW                  # needed by arp-scan
+    volumes:
+      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock

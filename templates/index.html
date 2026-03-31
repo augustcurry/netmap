@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Network Map</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.9/vis-network.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.9/dist/vis-network.min.css"/>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; font-family: Arial, sans-serif; margin: 0; }
+    #header { padding: 14px 20px; background: #1e293b; display: flex; justify-content: space-between; align-items: center; }
+    #header h2 { margin: 0; font-size: 18px; }
+    #status { font-size: 13px; color: #94a3b8; }
+    #legend { padding: 10px 20px; background: #1e293b; border-top: 1px solid #334155;
+              display: flex; gap: 20px; font-size: 12px; }
+    .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 6px; vertical-align: middle; }
+    #network { width: 100%; height: calc(100vh - 110px); }
+  </style>
+</head>
+<body>
+<div id="header">
+  <h2>🌐 Live Network Map</h2>
+  <span id="status">Connecting...</span>
+</div>
+<div id="legend">
+  <span><span class="dot" style="background:#3b82f6"></span>Router/Gateway</span>
+  <span><span class="dot" style="background:#22c55e"></span>LAN Device (online)</span>
+  <span><span class="dot" style="background:#8b5cf6"></span>Tailscale Peer (direct)</span>
+  <span><span class="dot" style="background:#f59e0b"></span>Tailscale Peer (via DERP relay)</span>
+  <span><span class="dot" style="background:#64748b"></span>Tailscale Peer (offline)</span>
+</div>
+<div id="network"></div>
+
+<script>
+const container = document.getElementById('network');
+const nodes = new vis.DataSet();
+const edges = new vis.DataSet();
+const network = new vis.Network(container, { nodes, edges }, {
+  physics: { solver: 'forceAtlas2Based', stabilization: { iterations: 100 } },
+  edges: { smooth: { type: 'dynamic' }, font: { color: '#94a3b8', size: 11 } },
+  nodes: { font: { color: '#e2e8f0', size: 13 }, borderWidth: 2 },
+  interaction: { hover: true, tooltipDelay: 100 }
+});
+
+function colorForPeer(peer) {
+  if (!peer.online) return '#64748b';
+  return peer.direct ? '#8b5cf6' : '#f59e0b';
+}
+
+function renderNetwork(data) {
+  const newNodes = [];
+  const newEdges = [];
+
+  // Gateway node (Assumed common gateway IP)
+  newNodes.push({ id: 'gateway', label: 'Gateway\nNetwork Hub',
+    color: { background: '#3b82f6', border: '#1d4ed8' }, shape: 'diamond', size: 30 });
+
+  // Tailscale hub
+  newNodes.push({ id: 'ts_hub', label: 'Tailscale\nMesh',
+    color: { background: '#7c3aed', border: '#4c1d95' }, shape: 'hexagon', size: 24 });
+  newEdges.push({ id: 'ts_link', from: 'gateway', to: 'ts_hub',
+    dashes: [8, 4], color: { color: '#7c3aed' }, label: 'VPN overlay' });
+
+  // LAN devices
+  if (data.lan) {
+    data.lan.forEach(h => {
+      const id = 'lan_' + h.ip;
+      newNodes.push({ id, label: (h.label || h.ip) + '\n' + h.ip,
+        color: { background: '#22c55e', border: '#15803d' }, shape: 'dot',
+        title: `IP: ${h.ip}<br>MAC: ${h.mac}` });
+      newEdges.push({ id: 'e_' + id, from: 'gateway', to: id, color: { color: '#334155' } });
+    });
+  }
+
+  // Tailscale self
+  if (data.tailscale_self) {
+    const s = data.tailscale_self;
+    newNodes.push({ id: 'ts_self', label: `${s.hostname} (you)\n${s.tailscale_ip}`,
+      color: { background: '#06b6d4', border: '#0e7490' }, shape: 'star', size: 22,
+      title: `This machine<br>Tailscale IP: ${s.tailscale_ip}` });
+    newEdges.push({ id: 'e_ts_self', from: 'ts_hub', to: 'ts_self',
+      color: { color: '#06b6d4' }, width: 2 });
+  }
+
+  // Tailscale peers
+  if (data.tailscale_peers) {
+    data.tailscale_peers.forEach(peer => {
+      const id = 'ts_' + peer.hostname;
+      const relay = peer.relay ? ` via ${peer.relay}` : ' direct';
+      newNodes.push({ id, label: peer.hostname + '\n' + peer.tailscale_ip,
+        color: { background: colorForPeer(peer), border: '#1e293b' }, shape: 'dot',
+        title: `Host: ${peer.hostname}<br>IP: ${peer.tailscale_ip}<br>Online: ${peer.online}<br>Path: ${peer.direct ? 'Direct P2P' : 'DERP relay (' + peer.relay + ')'}${peer.exit_node ? '<br>⚠ EXIT NODE' : ''}` });
+      newEdges.push({ id: 'e_' + id, from: 'ts_hub', to: id,
+        dashes: peer.direct ? false : [4, 4],
+        color: { color: colorForPeer(peer) },
+        label: peer.direct ? 'P2P' : 'DERP' + relay,
+        width: peer.online ? 2 : 1 });
+    });
+  }
+
+  // Batch update vis.js datasets
+  nodes.clear(); edges.clear();
+  nodes.add(newNodes); edges.add(newEdges);
+}
+
+// Live SSE updates
+const evtSource = new EventSource('/stream');
+evtSource.onmessage = e => {
+  const data = JSON.parse(e.data);
+  renderNetwork(data);
+  const d = new Date(data.ts * 1000);
+  document.getElementById('status').textContent =
+    `🟢 Live · Last updated ${d.toLocaleTimeString()}`;
+};
+evtSource.onerror = () => {
+  document.getElementById('status').textContent = '🔴 Disconnected — retrying...';
+};
+</script>
+</body>
+</html>
