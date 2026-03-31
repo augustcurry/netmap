@@ -85,23 +85,37 @@ def api_network():
     with cache["lock"]:
         return json.dumps(cache["data"])
 
+@app.route("/api/debug")
+def api_debug():
+    with cache["lock"]:
+        return {
+            "cache_status": "ready" if cache["data"] else "empty",
+            "data": cache["data"],
+            "timestamp": time.time()
+        }
+
 @app.route("/stream")
 def stream():
     def event_gen():
         last_ts = 0
         print("DEBUG: New SSE stream client connected.")
+        yield ": h\n\n" # Immediate tiny heartbeat
         while True:
             with cache["lock"]:
                 d = cache["data"]
             
-            # Send data if new, otherwise send a heartbeat ping
             if d.get("ts", 0) != last_ts:
                 last_ts = d.get("ts", 0)
                 yield f"data: {json.dumps(d)}\n\n"
             else:
-                yield ": heartbeat\n\n"  # SSE comment to keep connection alive
+                yield ": heartbeat\n\n"
             time.sleep(2)
-    return Response(event_gen(), mimetype="text/event-stream")
+            
+    response = Response(event_gen(), mimetype="text/event-stream")
+    response.headers['X-Accel-Buffering'] = 'no'
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['Connection'] = 'keep-alive'
+    return response
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5050, threaded=True)
