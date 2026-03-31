@@ -101,36 +101,61 @@ function renderNetwork(data) {
   nodes.add(newNodes); edges.add(newEdges);
 }
 
-// Live SSE updates
+// Live SSE updates with Polling Fallback
 const statusEl = document.getElementById('status');
-const evtSource = new EventSource('/stream');
+let evtSource = null;
+let lastUpdate = 0;
 
-evtSource.onopen = () => {
-  statusEl.textContent = '🟡 Connected. Waiting for first scan...';
-  console.log("SSE Connection opened.");
-};
+function fetchManual() {
+  fetch('/api/network')
+    .then(r => r.json())
+    .then(data => {
+      if (data && data.ts > lastUpdate) {
+        renderNetwork(data);
+        lastUpdate = data.ts;
+        const d = new Date(data.ts * 1000);
+        statusEl.textContent = `🔵 Polling · Last updated ${d.toLocaleTimeString()}`;
+      }
+    })
+    .catch(e => console.error("Poll error:", e));
+}
 
-evtSource.onmessage = e => {
-  try {
+function startStreaming() {
+  if (evtSource) evtSource.close();
+  evtSource = new EventSource('/stream');
+
+  evtSource.onopen = () => {
+    statusEl.textContent = '🟡 Connected. Waiting for data...';
+    console.log("SSE Stream opened.");
+  };
+
+  evtSource.onmessage = e => {
     const data = JSON.parse(e.data);
-    if (!data || Object.keys(data).length === 0) {
-      statusEl.textContent = '⚠️ Connected, but no data received yet.';
-      return;
+    if (data && data.ts) {
+      renderNetwork(data);
+      lastUpdate = data.ts;
+      const d = new Date(data.ts * 1000);
+      statusEl.textContent = `🟢 Live · Last updated ${d.toLocaleTimeString()}`;
     }
-    renderNetwork(data);
-    const d = new Date(data.ts * 1000);
-    statusEl.textContent = `🟢 Live · Last updated ${d.toLocaleTimeString()}`;
-    console.log("Data received:", data);
-  } catch (err) {
-    console.error("Error parsing SSE data:", err);
-    statusEl.textContent = '🔴 Data Error';
-  }
-};
+  };
 
-evtSource.onerror = (err) => {
-  console.error("SSE Error:", err);
-  statusEl.textContent = '🔴 Disconnected — retrying...';
-};
+  evtSource.onerror = () => {
+    console.warn("SSE failed. Switching to Polling mode...");
+    statusEl.textContent = '🟠 Streaming blocked. Using Polling...';
+    evtSource.close();
+    setInterval(fetchManual, 10000); // Poll every 10s as fallback
+    fetchManual(); // Immediate first poll
+  };
+}
+
+// Start with streaming, but if no data in 5s, try a manual fetch
+startStreaming();
+setTimeout(() => {
+  if (lastUpdate === 0) {
+    console.log("No initial stream data. Attempting manual fetch...");
+    fetchManual();
+  }
+}, 5000);
 </script>
 </body>
 </html>

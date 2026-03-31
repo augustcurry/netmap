@@ -97,9 +97,12 @@ def api_debug():
 @app.route("/stream")
 def stream():
     def event_gen():
+        # 2KB padding to force-flush browser buffers (especially for Chrome/IE/Proxy)
+        yield ":" + (" " * 2048) + "\n\n"
+        yield "retry: 2000\n\n"
+        
         last_ts = 0
         print("DEBUG: New SSE stream client connected.")
-        yield ": h\n\n" # Immediate tiny heartbeat
         while True:
             with cache["lock"]:
                 d = cache["data"]
@@ -108,7 +111,7 @@ def stream():
                 last_ts = d.get("ts", 0)
                 yield f"data: {json.dumps(d)}\n\n"
             else:
-                yield ": heartbeat\n\n"
+                yield ": h\n\n"
             time.sleep(2)
             
     response = Response(event_gen(), mimetype="text/event-stream")
